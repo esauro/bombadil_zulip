@@ -1,0 +1,19 @@
+# Upstream checkouts: read-only clones with their own .git, ~2.7 GB together.
+# Clone them yourself -- CHECKOUTS.md records the exact commits and what needs
+# them. Nothing at runtime does: the stack runs from the images pinned in .env.
+/zulip/
+/docker-zulip/
+/bombadil/
+
+# Local configuration, copied from .env.example. Holds the (weak, fixed) test
+# secrets, so it stays out of the repo on principle even though none matter.
+.env
+
+# Bombadil traces and screenshots -- tens of MB per run.
+/out/*
+!/out/.gitkeep
+
+# Editor types for the specification. Not needed: spec/tsconfig.json points at
+# the bombadil/ checkout's TypeScript sources instead.
+/spec/node_modules/
+/spec/package-lock.json

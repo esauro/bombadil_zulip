@@ -1,0 +1,204 @@
+# Two Bombadil instances property-testing one ephemeral Zulip.
+#
+# This is our own compose file rather than an override of docker-zulip's,
+# because that one is built around Docker secrets sourced from a .gitignored
+# compose.override.yaml, and because compose `include:` cannot re-declare
+# services from an included file. Nothing under docker-zulip/, zulip/ or
+# bombadil/ is modified: the four backing services are copied in shape from
+# docker-zulip/compose.yaml, with the secrets passed as the plain SECRETS_*
+# environment variables that image also supports (entrypoint.sh,
+# secretsConfiguration).
+#
+# Everything is ephemeral by design. No named volumes are declared, so each
+# `docker compose down` throws away the database, and the next `up` re-seeds
+# from scratch (about one to two minutes).
+name: bombadil-zulip
+
+x-bombadil: &bombadil
+  build:
+    # Root context: the image bakes in spec/, so the spec is versioned with
+    # the image rather than bind-mounted.
+    context: .
+    dockerfile: docker/bombadil/Dockerfile
+    args:
+      BOMBADIL_IMAGE: ${BOMBADIL_IMAGE:-antithesishq/bombadil:0.7.2}
+  image: bombadil-zulip/bombadil:local
+  # tini as PID 1, so the Chromium we launch ourselves gets reaped.
+  init: true
+  # Chromium is run with --disable-dev-shm-usage, but give it room anyway.
+  shm_size: 256mb
+  # The trace and screenshots land on a bind mount, so they have to be written
+  # as a uid that can write ./out on the host. Override BOMBADIL_USER in .env
+  # if yours is not 1000:1000.
+  user: ${BOMBADIL_USER:-1000:1000}
+  depends_on:
+    zulip:
+      condition: service_healthy
+  volumes:
+    - ./out:/out
+  environment: &bombadil-env
+    ZULIP_ORIGIN: https://${ZULIP_HOST:-zulip.test}/
+    BOMBADIL_TIME_LIMIT: ${BOMBADIL_TIME_LIMIT:-5m}
+    BOMBADIL_WIDTH: ${BOMBADIL_WIDTH:-1440}
+    BOMBADIL_HEIGHT: ${BOMBADIL_HEIGHT:-900}
+    BOMBADIL_OUTPUT_DIR: /out
+    RUST_LOG: ${RUST_LOG:-chromiumoxide=error}
+
+services:
+  database:
+    image: zulip/zulip-postgresql:14
+    environment:
+      POSTGRES_DB: zulip
+      POSTGRES_USER: zulip
+      POSTGRES_PASSWORD: ${ZULIP_POSTGRES_PASSWORD:?set ZULIP_POSTGRES_PASSWORD in .env}
+    attach: false
+
+  memcached:
+    image: memcached:alpine
+    command:
+      - sh
+      - -euc
+      - |
+        echo 'mech_list: plain' > "$$SASL_CONF_PATH"
+        echo "zulip@$$HOSTNAME:$$MEMCACHED_PASSWORD" > "$$MEMCACHED_SASL_PWDB"
+        echo "zulip@localhost:$$MEMCACHED_PASSWORD" >> "$$MEMCACHED_SASL_PWDB"
+        exec memcached -S
+    environment:
+      SASL_CONF_PATH: /home/memcache/memcached.conf
+      MEMCACHED_SASL_PWDB: /home/memcache/memcached-sasl-db
+      MEMCACHED_PASSWORD: ${ZULIP_MEMCACHED_PASSWORD:?set ZULIP_MEMCACHED_PASSWORD in .env}
+    attach: false
+
+  rabbitmq:
+    image: rabbitmq:4.2
+    command:
+      - sh
+      - -euc
+      - |
+        echo 'default_user = $$(RABBITMQ_DEFAULT_USER)' >> /etc/rabbitmq/rabbitmq.conf
+        echo 'default_pass = $$(RABBITMQ_DEFAULT_PASS)' >> /etc/rabbitmq/rabbitmq.conf
+        exec docker-entrypoint.sh rabbitmq-server
+    environment:
+      RABBITMQ_DEFAULT_USER: zulip
+      RABBITMQ_DEFAULT_PASS: ${ZULIP_RABBITMQ_PASSWORD:?set ZULIP_RABBITMQ_PASSWORD in .env}
+    attach: false
+
+  redis:
+    image: redis:alpine
+    command:
+      - sh
+      - -euc
+      - 'exec /usr/local/bin/docker-entrypoint.sh --requirepass "$$REDIS_PASSWORD"'
+    environment:
+      REDIS_PASSWORD: ${ZULIP_REDIS_PASSWORD:?set ZULIP_REDIS_PASSWORD in .env}
+    attach: false
+
+  zulip:
+    build:
+      context: docker/zulip-seeded
+      args:
+        ZULIP_IMAGE: ${ZULIP_IMAGE:-ghcr.io/zulip/zulip-server:12.2-0}
+        # Baked into the self-signed certificate at build time, so it must
+        # match ZULIP_HOST below and the network alias.
+        ZULIP_TEST_HOST: ${ZULIP_HOST:-zulip.test}
+    image: bombadil-zulip/zulip-seeded:local
+    depends_on:
+      - database
+      - memcached
+      - rabbitmq
+      - redis
+    networks:
+      default:
+        aliases:
+          # Chromium hard-codes *.localhost to loopback, so a ".localhost"
+          # hostname here would resolve to the Bombadil container itself.
+          - ${ZULIP_HOST:-zulip.test}
+    ports:
+      # Published for human debugging only; the test traffic stays inside the
+      # compose network. See README.md for browsing this yourself.
+      - "${ZULIP_HTTPS_PORT:-8443}:443"
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1048576
+    environment:
+      # --- backing services -------------------------------------------------
+      SETTING_REMOTE_POSTGRES_HOST: database
+      SETTING_MEMCACHED_LOCATION: memcached:11211
+      SETTING_RABBITMQ_HOST: rabbitmq
+      SETTING_REDIS_HOST: redis
+
+      # --- secrets, as plain environment variables --------------------------
+      # docker-zulip's compose.yaml passes these as Docker secrets read from a
+      # .gitignored compose.override.yaml; the image accepts SECRETS_<key>
+      # environment variables just as well (entrypoint.sh:409-424), which
+      # keeps this stack self-contained.
+      SECRETS_postgres_password: ${ZULIP_POSTGRES_PASSWORD}
+      SECRETS_memcached_password: ${ZULIP_MEMCACHED_PASSWORD}
+      SECRETS_rabbitmq_password: ${ZULIP_RABBITMQ_PASSWORD}
+      SECRETS_redis_password: ${ZULIP_REDIS_PASSWORD}
+      SECRETS_secret_key: ${ZULIP_SECRET_KEY:?set ZULIP_SECRET_KEY in .env}
+
+      # --- TLS --------------------------------------------------------------
+      # Mandatory, not a preference: under PRODUCTION Zulip forces
+      # SESSION_COOKIE_SECURE and renames the cookie to "__Host-sessionid" in
+      # zproject/computed_settings.py, which is imported after
+      # /etc/zulip/settings.py -- so it cannot be turned off from
+      # configuration, and a browser will not keep such a cookie on http://.
+      # The certificate is generated at image build time and installed into
+      # /data/certs/manual/ by our entrypoint.
+      CERTIFICATES: manual
+
+      # --- Zulip settings ---------------------------------------------------
+      SETTING_EXTERNAL_HOST: ${ZULIP_HOST:-zulip.test}
+      SETTING_ZULIP_ADMINISTRATOR: ${ZULIP_ADMIN_EMAIL:-admin@zulip.test}
+      # Security is deliberately minimal: the instance is ephemeral and is
+      # thrown away after the test.
+      SETTING_RATE_LIMITING: "False"
+      SETTING_RATE_LIMITING_AUTHENTICATE: "False"
+      SETTING_SEND_LOGIN_EMAILS: "False"
+      SETTING_EMAIL_BACKEND: django.core.mail.backends.dummy.EmailBackend
+      SETTING_SUBMIT_USAGE_STATISTICS: "False"
+      # No onboarding modals or navigation-tour video in the way of the
+      # explorer (zerver/lib/onboarding_steps.py: get_next_onboarding_steps
+      # returns nothing when this is off).
+      SETTING_TUTORIAL_ENABLED: "False"
+      # Cheaper queue workers; two Chromium instances share this machine.
+      CONFIG_application_server__queue_workers_multiprocess: ${ZULIP_QUEUE_WORKERS_MULTIPROCESS:-False}
+      # Nothing to back up in an ephemeral instance, and the cron job would
+      # only add noise mid-test.
+      AUTO_BACKUP_ENABLED: "False"
+
+      # --- seeding (read by docker/zulip-seeded/seed.sh) --------------------
+      ZULIP_REALM_NAME: ${ZULIP_REALM_NAME:-Bombadil Test}
+      ZULIP_CHANNEL: ${ZULIP_CHANNEL:-bombadil}
+      ZULIP_TOPIC: ${ZULIP_TOPIC:-general}
+      ZULIP_ADMIN_EMAIL: ${ZULIP_ADMIN_EMAIL:-admin@zulip.test}
+      ZULIP_ADMIN_NAME: ${ZULIP_ADMIN_NAME:-Realm Admin}
+      ZULIP_ADMIN_PASSWORD: ${ZULIP_ADMIN_PASSWORD:?set ZULIP_ADMIN_PASSWORD in .env}
+      ZULIP_USER1_EMAIL: ${ZULIP_USER1_EMAIL:-bombadil1@zulip.test}
+      ZULIP_USER1_NAME: ${ZULIP_USER1_NAME:-Bombadil One}
+      ZULIP_USER1_PASSWORD: ${ZULIP_USER1_PASSWORD:?set ZULIP_USER1_PASSWORD in .env}
+      ZULIP_USER1_SESSION_KEY: ${ZULIP_USER1_SESSION_KEY:?set ZULIP_USER1_SESSION_KEY in .env}
+      ZULIP_USER2_EMAIL: ${ZULIP_USER2_EMAIL:-bombadil2@zulip.test}
+      ZULIP_USER2_NAME: ${ZULIP_USER2_NAME:-Bombadil Two}
+      ZULIP_USER2_PASSWORD: ${ZULIP_USER2_PASSWORD:?set ZULIP_USER2_PASSWORD in .env}
+      ZULIP_USER2_SESSION_KEY: ${ZULIP_USER2_SESSION_KEY:?set ZULIP_USER2_SESSION_KEY in .env}
+
+  bombadil-1:
+    <<: *bombadil
+    environment:
+      <<: *bombadil-env
+      INSTANCE: user1
+      ZULIP_EMAIL: ${ZULIP_USER1_EMAIL:-bombadil1@zulip.test}
+      ZULIP_PASSWORD: ${ZULIP_USER1_PASSWORD}
+      ZULIP_SESSION_KEY: ${ZULIP_USER1_SESSION_KEY}
+
+  bombadil-2:
+    <<: *bombadil
+    environment:
+      <<: *bombadil-env
+      INSTANCE: user2
+      ZULIP_EMAIL: ${ZULIP_USER2_EMAIL:-bombadil2@zulip.test}
+      ZULIP_PASSWORD: ${ZULIP_USER2_PASSWORD}
+      ZULIP_SESSION_KEY: ${ZULIP_USER2_SESSION_KEY}

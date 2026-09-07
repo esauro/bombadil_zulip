@@ -1,0 +1,10 @@
+{
+  "name": "bombadil-zulip-spec",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Bombadil specification for the ephemeral Zulip test instance. Type-checking does not need this: spec/tsconfig.json maps the module paths onto the bombadil/ checkout's TypeScript sources, so `make typecheck` works without an npm install. The devDependency is recorded for editors that would rather resolve from node_modules, and pins the same version as BOMBADIL_IMAGE in .env.",
+  "type": "module",
+  "devDependencies": {
+    "@antithesishq/bombadil": "0.7.2"
+  }
+}

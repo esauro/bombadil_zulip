@@ -1,0 +1,38 @@
+{
+  // Type-check with:  make typecheck   (or: tsc -p spec)
+  //
+  // The module paths point at the bombadil/ checkout in this repository rather
+  // than at node_modules, so type-checking needs no npm install and can never
+  // drift from the version this stack actually runs (BOMBADIL_IMAGE in .env).
+  // package.json records the equivalent npm package for editors that prefer it.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@antithesishq/bombadil": ["../bombadil/lib/bombadil/src/specification/index.ts"],
+      "@antithesishq/bombadil/actions": ["../bombadil/lib/bombadil/src/specification/actions.ts"],
+      "@antithesishq/bombadil/internal": ["../bombadil/lib/bombadil/src/specification/internal.ts"],
+      "@antithesishq/bombadil/browser": ["../bombadil/lib/bombadil/src/specification/browser/index.ts"],
+      "@antithesishq/bombadil/browser/dom": ["../bombadil/lib/bombadil/src/specification/browser/dom.ts"],
+      "@antithesishq/bombadil/browser/defaults": ["../bombadil/lib/bombadil/src/specification/browser/defaults.ts"],
+      "@antithesishq/bombadil/browser/defaults/actions": ["../bombadil/lib/bombadil/src/specification/browser/defaults/actions.ts"],
+      "@antithesishq/bombadil/browser/defaults/properties": ["../bombadil/lib/bombadil/src/specification/browser/defaults/properties.ts"],
+      "@antithesishq/bombadil/browser/extras/resources": ["../bombadil/lib/bombadil/src/specification/browser/extras/resources.ts"]
+    },
+
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
+    // Extractors run in the real browser, so the DOM lib is the right one.
+    "lib": ["es2021", "dom"],
+    "types": [],
+
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

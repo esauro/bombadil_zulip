@@ -1,0 +1,20 @@
+# Build context for docker/bombadil/Dockerfile is the repository root, because
+# the image bakes in spec/. Without this file the three upstream checkouts
+# (hundreds of megabytes) would be uploaded to the daemon on every build.
+#
+# Note this file applies only to root-context builds; the Zulip image is built
+# with docker/zulip-seeded/ as its context.
+zulip/
+docker-zulip/
+bombadil/
+docker/zulip-seeded/
+features/
+out/
+.env
+.git/
+PLAN.md
+README.md
+Makefile
+compose.yaml
+spec/node_modules/
+spec/package-lock.json
