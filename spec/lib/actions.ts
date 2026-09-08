@@ -16,7 +16,7 @@ import { CharSet, type Range } from "@antithesishq/bombadil/actions";
 import { actions, type ActionTemplate } from "@antithesishq/bombadil/browser";
 import type { ActionGenerator } from "@antithesishq/bombadil";
 
-import { me, MY_MARKER_PATTERN } from "./credentials.ts";
+import { me, MY_MARKER_PATTERN, sameTopic } from "./credentials.ts";
 import {
   blockingOverlay,
   canGoBack,
@@ -178,7 +178,7 @@ export const exchangeMessages: ActionGenerator<ActionTemplate> = actions(
       const onOurConversation =
         box.kind === "channel" &&
         sameName(box.channel, me.channel) &&
-        sameName(box.topic, me.topic);
+        sameTopic(box.topic, me.topic);
       if (!onOurConversation) {
         return box.closeTarget
           ? [{ Click: box.closeTarget }]
@@ -204,7 +204,7 @@ export const exchangeMessages: ActionGenerator<ActionTemplate> = actions(
 
     const here = narrow.current;
     const inOurTopic =
-      sameName(here.channel, me.channel) && sameName(here.topic, me.topic);
+      sameName(here.channel, me.channel) && sameTopic(here.topic, me.topic);
     if (inOurTopic) {
       if (box.replyTarget) return [{ Click: box.replyTarget }];
       if (box.newConversationTarget) {

@@ -11,7 +11,7 @@ import {
   type Point,
 } from "@antithesishq/bombadil/browser";
 
-import { me } from "./credentials.ts";
+import { me, sameTopic } from "./credentials.ts";
 
 export type ClickTarget = { fingerprint: Fingerprint; point: Point };
 
@@ -303,7 +303,9 @@ export const sidebarLinks = extract<SidebarLinks>((state) => {
     body.querySelectorAll("li.topic-list-item[data-topic-name]"),
   )) {
     const name = item.getAttribute("data-topic-name") ?? "";
-    if (!sameName(name, me.topic)) continue;
+    // sameTopic, not sameName: the seeded topic is listed as "✔ general" once
+    // it has been resolved, and it is still our rendezvous.
+    if (!sameTopic(name, me.topic)) continue;
     result.topicTarget = clickTarget(item.querySelector("a.topic-box"));
     if (result.topicTarget) break;
   }

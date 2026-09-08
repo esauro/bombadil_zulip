@@ -44,5 +44,24 @@ export function isPeerMarker(marker: string): boolean {
   return ANY_MARKER.test(marker) && !MY_MARKER.test(marker);
 }
 
+// Resolving a topic renames it in place, prepending "✔ "
+// (web/src/resolved_topic.ts, RESOLVED_TOPIC_PREFIX; the regex also copes with
+// the "✔ ✔✔ " that repeated resolve/unresolve can leave behind). A resolved
+// topic is the same conversation as its unresolved form, so every topic
+// comparison in the spec ignores the prefix. Without this, the message
+// exchange loses its rendezvous the instant random exploration clicks "Mark as
+// resolved" -- which is exactly what stranded one instance in the first run.
+const RESOLVED_TOPIC_PREFIX_RE = /^✔ [ ✔]*/;
+
+/** A topic name with any resolved-topic prefix removed, trimmed and lowercased. */
+export function normalizeTopic(topic: string): string {
+  return topic.replace(RESOLVED_TOPIC_PREFIX_RE, "").trim().toLowerCase();
+}
+
+/** Whether two topic names denote the same conversation, resolution aside. */
+export function sameTopic(a: string | null, b: string): boolean {
+  return a !== null && normalizeTopic(a) === normalizeTopic(b);
+}
+
 /** The rand_regex pattern Bombadil uses to generate a fresh marker to send. */
 export const MY_MARKER_PATTERN = `${me.marker}-[0-9]{6}`;

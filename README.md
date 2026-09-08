@@ -355,6 +355,12 @@ conversation, each one sees the other's messages arrive. Random typing into the
 compose box is sent along with the marker rather than fought; the marker is
 what the properties look for.
 
+Topic comparison ignores the resolved-topic prefix (`resolved_topic.ts`), so
+when random exploration clicks "Mark as resolved" and Zulip renames the topic
+`general` to `✔ general`, the flow keeps treating it as the rendezvous instead
+of losing track of it. That mattered: in an early run one instance got stranded
+bouncing around a resolved topic and stopped sending.
+
 The exclusivity matters. The first run of this stack weighted `login` against
 the defaults instead, and the random `inputs` generator typed a garbage email
 into the username field before `login` did, while `clicks` kept wandering off to

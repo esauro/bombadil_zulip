@@ -26,6 +26,11 @@ export const BENIGN_CONSOLE_ERRORS: RegExp[] = [
   // Well-known browser noise unrelated to the application.
   /ResizeObserver loop/i,
   /Unchecked runtime\.lastError/i,
+  // Zulip's own blueslip error when a list cursor is told to highlight a row
+  // that keyboard or typeahead navigation has already scrolled out of the DOM
+  // (web/src/list_cursor.ts). Cosmetic: the list recovers on the next
+  // keystroke, and random exploration provokes it by design.
+  /Cannot highlight key for ListCursor/,
 ];
 
 function isUnexpected(message: string): boolean {
