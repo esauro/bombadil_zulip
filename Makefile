@@ -87,6 +87,26 @@ env: .env ## Create .env from .env.example if it does not exist
 	    echo "      written to ./out are owned by you."; \
 	fi
 
+# The published antithesishq/bombadil image can carry code compiled for the
+# CI runner's CPU (v0.7.2 ships AVX-512 instructions in the Zig-built
+# libghostty-vt, which SIGILLs -- exit 132 -- on CPUs without it, e.g. Intel
+# Arrow Lake / Meteor Lake). Building the image here compiles for this machine.
+# Needs the bombadil/ checkout (see CHECKOUTS.md) and nix with flakes.
+BOMBADIL_LOCAL_TAG ?= antithesishq/bombadil:0.7.2-local
+
+.PHONY: bombadil-image
+bombadil-image: ## Build the Bombadil base image from bombadil/ with nix and load it as $(BOMBADIL_LOCAL_TAG)
+	@[ -f bombadil/flake.nix ] || { echo "bombadil/ checkout missing -- see CHECKOUTS.md"; exit 1; }
+	nix build --extra-experimental-features 'nix-command flakes' --accept-flake-config \
+	    ./bombadil#docker -o out/bombadil-docker-image.tar.gz
+	@src=$$($(DOCKER) load -q -i out/bombadil-docker-image.tar.gz | awk -F': ' '/Loaded image/ {print $$2}'); \
+	echo "loaded $$src"; \
+	$(DOCKER) tag "$$src" $(BOMBADIL_LOCAL_TAG); \
+	echo; \
+	echo "Tagged $(BOMBADIL_LOCAL_TAG). Now set in .env:"; \
+	echo "    BOMBADIL_IMAGE=$(BOMBADIL_LOCAL_TAG)"; \
+	echo "and run 'make build'."
+
 .PHONY: build
 build: env ## Build both images (Zulip with the baked cert and seed hook, Bombadil with the spec)
 	$(COMPOSE_BUILD) build

@@ -29,6 +29,17 @@ RUN set -eu; \
     [ -e /etc/services ] || printf 'http 80/tcp\nhttps 443/tcp\ndomain 53/udp\ndomain 53/tcp\n' >/etc/services; \
     chmod 644 /etc/nsswitch.conf /etc/protocols /etc/services
 
+# Bombadil fetches the debugger's /json/version with reqwest, whose rustls
+# platform verifier loads the system CA store when the client is created --
+# even for that plain-http request -- and fails outright when the store is
+# empty. The Nix image ships no CA bundle (upstream's own test harness exports
+# SSL_CERT_FILE for exactly this reason, lib/nix/default.nix), so without this
+# `bombadil browser test-external` dies with
+# "failed to get web_socket_remote_debugger URL after 5 attempts".
+# Borrow a bundle from a stock image and point at it explicitly.
+COPY --from=alpine:3.21 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 # The base image runs as the unprivileged "browser" user but sets no HOME;
 # chromium and fontconfig both need a writable one. run.sh falls back to a
 # temporary directory if this one is not writable, which is what happens when

@@ -153,6 +153,25 @@ make manage ARGS="list_realms"
 make shell          # a shell inside the Zulip container
 ```
 
+### Both Bombadil containers exit with code 132 right after "starting bombadil"
+
+Exit 132 is SIGILL. `sudo dmesg | grep traps` shows
+`bombadil[...] trap invalid opcode ... in bombadil`, and the faulting
+instruction is AVX-512 (`vpmovsxbq ... %zmm2`). The published
+`antithesishq/bombadil:0.7.2` image contains a block of AVX-512 code (the
+Zig-built `libghostty-vt`, compiled for the CI runner's CPU), so it dies on
+any CPU without AVX-512 -- Intel Arrow Lake / Meteor Lake, most consumer
+parts since Alder Lake. `bombadil --version` still works because the
+subcommand never reaches that code.
+
+Build the image on this machine instead, from the `bombadil/` checkout:
+
+```bash
+make bombadil-image                 # nix build ./bombadil#docker, docker load, tag :0.7.2-local
+# then in .env:  BOMBADIL_IMAGE=antithesishq/bombadil:0.7.2-local
+make build test
+```
+
 ### Bombadil sits on "waiting for https://zulip.test/"
 
 ```bash
