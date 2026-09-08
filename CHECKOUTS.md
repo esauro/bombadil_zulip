@@ -38,12 +38,14 @@ are needed only for:
 - **`make inspect`** -- falls back to `bombadil/target/debug/bombadil` if no
   `bombadil` is on `PATH`; otherwise it uses the container image.
 - **Reading Zulip's source** to check a selector or a settings default, which
-  is how most of the design decisions in `PLAN.md` were made.
+  is how most of the design decisions here were made.
 
 ## Version skew to keep in mind
 
 `zulip/` is `12.0-dev+git` while the image it runs is `12.2-0`. That gap has
-already caused one real failure: `create_realm`'s argument handling differs
-between them (see `PLAN.md` §8). When checking behaviour, prefer asking the
+already caused one real failure: the `12.2-0` image rejected the
+`create_realm` / `create_user` management-command invocation that the checkout's
+argument parser accepted, which is why `seed.py` calls `do_create_realm` and
+`do_create_user` directly instead. When checking behaviour, prefer asking the
 running container -- `make manage ARGS="<command> --help"` -- over reading the
 checkout.

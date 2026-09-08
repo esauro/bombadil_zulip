@@ -12,7 +12,6 @@ features/
 out/
 .env
 .git/
-PLAN.md
 README.md
 Makefile
 compose.yaml
