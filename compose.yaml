@@ -38,6 +38,10 @@ x-bombadil: &bombadil
     - ./out:/out
   environment: &bombadil-env
     ZULIP_ORIGIN: https://${ZULIP_HOST:-zulip.test}/
+    # The channel and topic seed.py creates; the spec's message-exchange flow
+    # navigates there before sending, so both instances read the same feed.
+    ZULIP_CHANNEL: ${ZULIP_CHANNEL:-bombadil}
+    ZULIP_TOPIC: ${ZULIP_TOPIC:-general}
     BOMBADIL_TIME_LIMIT: ${BOMBADIL_TIME_LIMIT:-5m}
     BOMBADIL_WIDTH: ${BOMBADIL_WIDTH:-1440}
     BOMBADIL_HEIGHT: ${BOMBADIL_HEIGHT:-900}
@@ -192,7 +196,6 @@ services:
       INSTANCE: user1
       ZULIP_EMAIL: ${ZULIP_USER1_EMAIL:-bombadil1@zulip.test}
       ZULIP_PASSWORD: ${ZULIP_USER1_PASSWORD}
-      ZULIP_SESSION_KEY: ${ZULIP_USER1_SESSION_KEY}
 
   bombadil-2:
     <<: *bombadil
@@ -201,4 +204,3 @@ services:
       INSTANCE: user2
       ZULIP_EMAIL: ${ZULIP_USER2_EMAIL:-bombadil2@zulip.test}
       ZULIP_PASSWORD: ${ZULIP_USER2_PASSWORD}
-      ZULIP_SESSION_KEY: ${ZULIP_USER2_SESSION_KEY}

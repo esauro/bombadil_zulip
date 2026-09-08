@@ -20,6 +20,9 @@ export type Credentials = {
    * digits and dashes.
    */
   marker: string;
+  /** The seeded channel and topic both instances exchange messages in. */
+  channel: string;
+  topic: string;
 };
 
 export const me: Credentials = credentials as Credentials;
@@ -35,6 +38,11 @@ export const ANY_MARKER = /bombadil-[A-Za-z0-9-]+?-\d{6}/;
 
 /** Matches only this instance's markers. */
 export const MY_MARKER = new RegExp(`${me.marker}-\\d{6}`);
+
+/** True for a marker sent by the other instance. */
+export function isPeerMarker(marker: string): boolean {
+  return ANY_MARKER.test(marker) && !MY_MARKER.test(marker);
+}
 
 /** The rand_regex pattern Bombadil uses to generate a fresh marker to send. */
 export const MY_MARKER_PATTERN = `${me.marker}-[0-9]{6}`;

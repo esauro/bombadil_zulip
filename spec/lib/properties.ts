@@ -13,10 +13,13 @@ import {
   type Formula,
 } from "@antithesishq/bombadil";
 
-import { ANY_MARKER } from "./credentials.ts";
+import { ANY_MARKER, isPeerMarker, me } from "./credentials.ts";
 import {
   composeBox,
   connectionErrorBanner,
+  lastAction,
+  loggedIn,
+  loginForm,
   messageContents,
   messageLists,
   messageSentBanner,
@@ -31,6 +34,49 @@ function composeMarker(): string | null {
   const match = ANY_MARKER.exec(box.value);
   return match ? match[0] : null;
 }
+
+/** The login form is on screen and holds exactly this instance's credentials. */
+function formHoldsMyCredentials(): boolean {
+  const form = loginForm.current;
+  return (
+    form !== null &&
+    form.username === me.email &&
+    form.password === me.password
+  );
+}
+
+/**
+ * Logging in works: once the form holds this instance's credentials, the app
+ * is on screen within a minute.
+ *
+ * While the form is on screen the login stage is the only generator running,
+ * and it clicks "Log in" as soon as both fields are right, so "the form holds
+ * our credentials" is precisely the state before the submit. The bound is
+ * generous because a cold Zulip serves its first app page slowly, and under
+ * fault injection slower still.
+ */
+export const loginSucceeds: Formula = always(
+  now(formHoldsMyCredentials).implies(
+    eventually(() => loggedIn.current).within(60, "seconds"),
+  ),
+);
+
+/**
+ * The server never rejects this instance's credentials.
+ *
+ * A rejected POST re-renders the form at /accounts/login/ with an error alert
+ * and the submitted email. Seeing that alert next to our own email means the
+ * seeded user or its password is wrong, or an authentication backend is
+ * unavailable. Rate limiting is off in this stack
+ * (SETTING_RATE_LIMITING_AUTHENTICATE in compose.yaml), so the repeated logins
+ * that follow every "log out" cannot trip this legitimately.
+ */
+export const credentialsAccepted: Formula = always(() => {
+  const form = loginForm.current;
+  return (
+    form === null || form.serverError === null || form.username !== me.email
+  );
+});
 
 /**
  * The browser never lands on a server error page -- Zulip's own 500
@@ -101,26 +147,46 @@ export const connectionRecovers: Formula = always(
 );
 
 /**
- * A contextful guarantee, and the reason for running two instances: a marked
- * message that leaves the compose box has to turn up somewhere.
+ * The last action was a click on the compose box's Send button.
  *
- * Precondition: the compose box holds a marker now, and in the next state it
- * holds a different one (or none) -- i.e. the send went through rather than
- * being rejected. Zulip keeps the text in the box when it refuses to send, so
- * this precondition excludes rejected sends on its own.
+ * Checked on the serialised action rather than through the `Action` type:
+ * fingerprints arrive from the Rust side in snake_case, which the TypeScript
+ * type does not reflect, and the button's id is the same either way.
+ */
+function sendClicked(): boolean {
+  const action = lastAction.current;
+  return (
+    action !== null &&
+    typeof action === "object" &&
+    "Click" in action &&
+    JSON.stringify(action).includes("compose-send-button")
+  );
+}
+
+/**
+ * A contextful guarantee: a marked message that was sent has to turn up.
  *
- * Conclusion: the marker shows up in the message feed, or Zulip says the
+ * Precondition: the compose box holds a marker now, and the next state was
+ * produced by clicking Send. That is precisely what exchangeMessages does, and
+ * it excludes the other ways a marker can leave the box -- Escape, "Cancel
+ * compose", a random click elsewhere -- which the first version of this
+ * property mistook for sends.
+ *
+ * Conclusion: the marker shows up in the rendered feed, or Zulip says the
  * message went somewhere outside the current view ("Sent! Your message is
  * outside your current view."). Either is a correct answer; silence is not.
+ * Zulip refusing the send (an error banner, the text staying in the box) is
+ * a violation too, and deliberately so: the box was addressed to a channel
+ * both users are subscribed to.
  *
- * ANY_MARKER matches both instances' markers, so this also covers instance 2
- * observing what instance 1 sent, whenever the two are in the same narrow.
+ * ANY_MARKER matches both instances' markers, so a quoted or forwarded peer
+ * marker is covered as well.
  */
 export const sentMessageAppears: Formula = always(() => {
   const marker = composeMarker();
 
   return now(() => marker !== null)
-    .and(next(() => composeMarker() !== marker))
+    .and(next(sendClicked))
     .implies(
       eventually(
         () =>
@@ -132,3 +198,27 @@ export const sentMessageAppears: Formula = always(() => {
       ).within(60, "seconds"),
     );
 });
+
+/** Some rendered message carries a marker sent by the other instance. */
+function peerMarkerVisible(): boolean {
+  return messageContents.current.some((content) =>
+    (content.match(new RegExp(ANY_MARKER.source, "g")) ?? []).some(isPeerMarker),
+  );
+}
+
+/**
+ * The reason for running two instances: within three minutes of starting,
+ * this instance has seen a message the other instance sent.
+ *
+ * exchangeMessages keeps both browsers returning to the same channel and
+ * topic and sending there every few states, so three minutes is generous for
+ * a healthy stack -- it covers the other instance's login and app load, and
+ * a stretch of it wandering through settings. Under fault injection this is
+ * the property that says messages still get through; if a run legitimately
+ * needs longer (a very slow machine, a paused peer), raise the bound rather
+ * than dropping the property.
+ */
+export const peerMessageReceived: Formula = eventually(peerMarkerVisible).within(
+  180,
+  "seconds",
+);

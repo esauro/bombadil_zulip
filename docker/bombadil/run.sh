@@ -14,7 +14,8 @@ set -euo pipefail
 : "${ZULIP_ORIGIN:?ZULIP_ORIGIN must be set (e.g. https://zulip.test/)}"
 : "${ZULIP_EMAIL:?ZULIP_EMAIL must be set}"
 : "${ZULIP_PASSWORD:?ZULIP_PASSWORD must be set}"
-: "${ZULIP_SESSION_KEY:?ZULIP_SESSION_KEY must be set}"
+: "${ZULIP_CHANNEL:=bombadil}"
+: "${ZULIP_TOPIC:=general}"
 : "${BOMBADIL_TIME_LIMIT:=5m}"
 : "${BOMBADIL_OUTPUT_DIR:=/out}"
 : "${BOMBADIL_WIDTH:=1440}"
@@ -60,8 +61,9 @@ fi
 
 # ---------------------------------------------------------------------------
 # The specification needs to know which user this instance is: which
-# credentials to type on the login page, and which marker text to send so that
-# the other instance's messages are distinguishable from its own. The spec
+# credentials to type on the login page, which marker text to send so that the
+# other instance's messages are distinguishable from its own, and which channel
+# and topic the two instances exchange messages in. The spec
 # runtime has no access to the environment, so we materialise the values into
 # a JSON module the spec imports, in a writable copy of the spec tree.
 # ---------------------------------------------------------------------------
@@ -80,7 +82,9 @@ cat >"$work/spec/credentials.json" <<EOF
   "instance": "$(json_escape "$INSTANCE")",
   "email": "$(json_escape "$ZULIP_EMAIL")",
   "password": "$(json_escape "$ZULIP_PASSWORD")",
-  "marker": "bombadil-$(json_escape "$INSTANCE")"
+  "marker": "bombadil-$(json_escape "$INSTANCE")",
+  "channel": "$(json_escape "$ZULIP_CHANNEL")",
+  "topic": "$(json_escape "$ZULIP_TOPIC")"
 }
 EOF
 log "specification at $work/spec/zulip.ts"
@@ -146,19 +150,6 @@ while [ "$(probe_code)" != "200" ]; do
 done
 log "Zulip is answering ($ready_url -> 200)"
 
-# Does the pre-minted session actually authenticate? curl sends the cookie
-# without caring about the "__Host-" prefix rules, so this checks the server
-# side only -- but it cleanly separates "seeding minted the session wrong"
-# from "Chromium refused the cookie", which are debugged very differently.
-session_status="$(curl -ks -o /dev/null -w '%{http_code}' --max-time 10 \
-    -b "__Host-sessionid=${ZULIP_SESSION_KEY}" "$ZULIP_ORIGIN" || echo 000)"
-if [ "$session_status" = "200" ]; then
-    log "pre-minted session works server-side (GET / -> 200 as $ZULIP_EMAIL)"
-else
-    log "WARNING: GET / with the pre-minted session returned $session_status, not 200."
-    log "         Bombadil will have to log in through the form instead."
-fi
-
 # ---------------------------------------------------------------------------
 # Our own Chromium. --ignore-certificate-errors is the whole reason this
 # container does not use `bombadil browser test`.
@@ -210,17 +201,14 @@ done
 log "CDP up: $(curl -sf "http://${CDP_HOST}:${CDP_PORT}/json/version" || true)"
 
 # ---------------------------------------------------------------------------
-# The pre-minted session cookie. It must be given in plain NAME=VALUE form
-# with only the Secure attribute: adding Path or Domain makes Bombadil set
-# `domain` on the CDP CookieParam (lib/bombadil-browser/src/cookie.rs), and a
-# "__Host-"-prefixed cookie with a Domain is rejected by Chromium.
-#
-# If the cookie is ever rejected, the run still works: the spec's staged login
-# generator drives the real /login/ form instead. It is exported
-# unconditionally, because Bombadil will eventually click "log out" while
-# exploring and has to be able to get back in.
+# No cookie is handed over: the browser starts logged out at $ZULIP_ORIGIN,
+# which redirects to /login/, and the specification's login stage types
+# $ZULIP_EMAIL / $ZULIP_PASSWORD into the real form and submits it before any
+# random exploration begins. The same stage runs again whenever exploration
+# clicks "log out".
 # ---------------------------------------------------------------------------
 log "starting bombadil (time limit $BOMBADIL_TIME_LIMIT, output $output_path)"
+log "logging in through the web form as $ZULIP_EMAIL"
 # Bombadil's bundler resolves the specification relative to the working
 # directory, so run from the copy rather than passing an absolute path.
 cd "$work"
@@ -230,7 +218,6 @@ exec bombadil browser test-external \
     --time-limit "$BOMBADIL_TIME_LIMIT" \
     --width "$BOMBADIL_WIDTH" \
     --height "$BOMBADIL_HEIGHT" \
-    --cookie "__Host-sessionid=${ZULIP_SESSION_KEY}; Secure" \
     --output-path "$output_path" \
     --output-path-overwrite \
     "$ZULIP_ORIGIN" \

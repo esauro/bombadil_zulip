@@ -78,8 +78,9 @@ The seeded instance contains:
   instance;
 - one public channel (`#bombadil`) that all three are subscribed to, with a
   few messages already in it;
-- two Django sessions under keys fixed in `.env`, so each Bombadil container
-  starts already logged in.
+- two Django sessions under keys fixed in `.env`. Nothing uses them at the
+  moment: each Bombadil instance logs in through the real login page with its
+  user's email and password (see "How login works" below).
 
 Everything is ephemeral. No named volumes are declared, so `make down` deletes
 the database along with the containers and the next run re-seeds from scratch.
@@ -291,11 +292,16 @@ chatty and the unfiltered default fires within seconds. On top of those,
 | `messageIdsAscend` | message ids increase down a rendered list (fractional ids for locally echoed messages sort correctly) |
 | `unreadCountsAreSane` | unread badges are empty or a non-negative integer |
 | `connectionRecovers` | if the "unable to connect, reconnecting" banner appears, it goes away within 60s |
-| `sentMessageAppears` | a marked message that leaves the compose box shows up in the feed, or Zulip says where it went |
+| `loginSucceeds` | once the form holds this instance's credentials, the app appears within 60s |
+| `credentialsAccepted` | Zulip never rejects this instance's email and password |
+| `sentMessageAppears` | after Send is clicked on a marked message, it shows up in the feed within 60s, or Zulip says where it went |
+| `peerMessageReceived` | within 3 minutes of starting, this instance has seen a message the *other* instance sent |
 
-`sentMessageAppears` is the reason for running *two* instances: each one sends
-messages tagged `bombadil-<instance>-<n>`, and the property matches either
-instance's marker, so it also covers instance 2 observing instance 1's traffic.
+`peerMessageReceived` is the reason for running *two* instances: each one sends
+messages tagged `bombadil-<instance>-<n>` to the seeded channel and topic, and
+the property fails unless a marker from the other instance is rendered in this
+one's browser. The bound is generous for a healthy stack and is meant to be
+raised, not dropped, if a run legitimately needs longer.
 
 Properties are deliberately conservative. Random exploration produces plenty of
 *legitimately* bad-looking UI -- missing topic, not subscribed to the channel,
@@ -305,16 +311,35 @@ navigation response of 400 or worse, and exploration does click its way into
 the odd 404), drop it from `spec/zulip.ts` and rely on `noServerErrorPage`,
 which only cares about 5xx.
 
-**Actions.** `spec/zulip.ts` builds its own weighted root generator instead of
-re-exporting `defaultActions`, so two staged Zulip flows can be mixed with the
-generic ones:
+**Actions.** Bombadil weights every exported generator equally, so
+`spec/zulip.ts` exports exactly one: a staged root that looks at the page and
+hands the whole turn to one of three stages.
 
-- `login` drives the real `/login/` form, one field per state. Heavily
-  weighted, but it contributes nothing at all unless the login form is on
-  screen -- so it is free during normal exploration, and recovers quickly after
-  random exploration inevitably clicks "log out".
-- `composeAndSend` focuses the compose box, types a marked message, and presses
-  Enter.
+- `login` runs *alone* whenever the `/login/` form is on screen: focus the
+  username field, type the email, focus the password field, type the password,
+  click "Log in" -- one step per state, skipping fields that are already right
+  and clearing any that are wrong. Nothing else gets a turn until the form is
+  gone.
+- `returnToLogin` runs when the browser is neither logged in nor on the form
+  (a portico page, the redirect after "log out"): it clicks the header's "Log
+  in" link, or goes back.
+- `explore` runs once the app is on screen. It is a weighted mix in which
+  `exchangeMessages` has the heaviest weight, over the Bombadil defaults
+  (`clicks`, `inputs`, `scroll`, `navigation`, `waitOnce`).
+
+`exchangeMessages` is the workload: one step per state, it closes any overlay,
+closes a compose box addressed to the wrong conversation, navigates through the
+left sidebar to the seeded channel and topic, clicks "Compose message", types
+a fresh marker and clicks Send (Zulip's default is Ctrl+Enter to send, so
+Enter is not used). Because both instances keep returning to the same
+conversation, each one sees the other's messages arrive. Random typing into the
+compose box is sent along with the marker rather than fought; the marker is
+what the properties look for.
+
+The exclusivity matters. The first run of this stack weighted `login` against
+the defaults instead, and the random `inputs` generator typed a garbage email
+into the username field before `login` did, while `clicks` kept wandering off to
+the help center and the terms page. Neither instance ever reached the app.
 
 **Triaging console noise.** `spec/lib/console.ts` holds an allow-list of
 console error patterns with a comment on each. To extend it, export
@@ -329,22 +354,31 @@ bundles specifications with its own resolver, so no `node_modules` is needed at
 runtime either. The spec is baked into the Bombadil image, so re-run
 `make build` (or just `make test`, which builds) after editing it.
 
-## How login without a login flow works
+## How login works
 
-`docker/zulip-seeded/seed.py` creates Django sessions under keys fixed in
-`.env`, and each Bombadil container is handed the matching value as
-`--cookie "__Host-sessionid=<key>; Secure"`. No cross-container secret handoff,
-no shared volume, no host orchestration -- and deterministic, which is what the
-Antithesis phase wants.
+Each Bombadil container starts its Chromium logged out and opens
+`https://zulip.test/`, which redirects to `/login/`. The specification's login
+stage then types the instance's email and password -- from `ZULIP_EMAIL` and
+`ZULIP_PASSWORD`, which `run.sh` writes into `spec/credentials.json` -- into the
+real form and clicks "Log in". Only when the app is on screen does random
+exploration start, and the same stage takes over again whenever exploration
+clicks "log out".
 
-The cookie must be given in plain `NAME=VALUE` form with only `Secure`: if
-`Path` or `Domain` is present, Bombadil also sets `domain` on the CDP cookie
-parameter (`bombadil/lib/bombadil-browser/src/cookie.rs`), and a
-`__Host-`-prefixed cookie with a domain is invalid.
+Two properties watch this: `loginSucceeds` requires the app to appear within a
+minute of the form holding the right credentials, and `credentialsAccepted`
+fails if Zulip ever re-renders the form with a server-side error next to this
+instance's email, which would mean the seeded user or its password is wrong.
 
-If that cookie is ever rejected, the run still works: the `login` action
-generator drives the real form instead. That generator is worth having
-regardless, for the "log out" case.
+`docker/zulip-seeded/seed.py` also mints a Django session per user under the
+keys in `.env`, and an earlier version of `run.sh` handed those to Bombadil as
+`--cookie "__Host-sessionid=<key>; Secure"` to skip the form. The cookie never
+took effect in the browser, and the form is what we want exercised anyway, so
+`run.sh` no longer passes it. If pre-authenticated sessions are wanted later --
+they would be cheaper under Antithesis -- the seeding side is still in place;
+note that the cookie must then be given in plain `NAME=VALUE; Secure` form,
+because a `Path` or `Domain` attribute makes Bombadil set `domain` on the CDP
+cookie parameter (`bombadil/lib/bombadil-browser/src/cookie.rs`), which is
+invalid for a `__Host-` cookie.
 
 ## Layout
 
@@ -366,11 +400,12 @@ docker/bombadil/
 spec/
   zulip.ts                    top-level specification
   lib/dom.ts                  extractors
-  lib/actions.ts              staged login and compose generators
+  lib/actions.ts              staged login, return-to-login and compose generators
+  lib/fingerprint.ts          works around a 0.7.2 fingerprint bug Zulip's DOM triggers
   lib/properties.ts           Zulip properties
   lib/console.ts              filtered console-error property
   lib/credentials.ts          per-instance identity
-  credentials.json            overwritten per instance at container start
+  credentials.json            overwritten per instance at container start (email, password, marker, channel, topic)
 out/                          traces and screenshots, one directory per instance
 ```
 
